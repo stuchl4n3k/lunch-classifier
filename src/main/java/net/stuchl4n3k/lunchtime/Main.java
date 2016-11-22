@@ -1,5 +1,6 @@
 package net.stuchl4n3k.lunchtime;
 
+import java.awt.Desktop;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -24,8 +25,8 @@ import org.opencv.ml.CvANN_MLP;
 /**
  * LunchCam classifier using ANN (OpenCV implementation).
  * <p>
- *     Based on <a href="http://docs.opencv.org/2.4/modules/ml/doc/neural_networks.html">http://docs.opencv.org/2.4/modules/ml/doc/neural_networks.html</a>
- *     and <a href="http://docs.opencv.org/3.1.0/dc/dd6/ml_intro.html">http://docs.opencv.org/3.1.0/dc/dd6/ml_intro.html</a>.
+ * Based on <a href="http://docs.opencv.org/2.4/modules/ml/doc/neural_networks.html">http://docs.opencv.org/2.4/modules/ml/doc/neural_networks.html</a>
+ * and <a href="http://docs.opencv.org/3.1.0/dc/dd6/ml_intro.html">http://docs.opencv.org/3.1.0/dc/dd6/ml_intro.html</a>.
  * </p>
  *
  * @author petr.stuchlik
@@ -42,15 +43,16 @@ public class Main {
     public static final Pattern SAMPLE_PATH_CLASS_PATTERN = Pattern.compile(".*_([012])\\.jpg$");
 
     // Parametrization:
-    public static final int SAMPLE_W = 10;
-    public static final int SAMPLE_H = 7;
+    public static final int SAMPLE_W = 80;
+    public static final int SAMPLE_H = 60;
     public static final int NUM_NEURONS_INPUT = SAMPLE_W * SAMPLE_H;
-    public static final int NUM_NEURONS_HIDDEN_LAYER = NUM_NEURONS_INPUT / 2;
+    public static final int NUM_NEURONS_HIDDEN_LAYER = 3;
     public static final int NUM_NEURONS_OUTPUT = 1;
     public static final double PERCENT_TRN_SAMPLES = 0.85;
+    public static final boolean INCREASE_SAMPLE_CONTRAST = false;
 
     public static void main(String[] args) {
-        int numIterations = 20;
+        int numIterations = 10;
         double tstErrRateSum = 0;
         for (int i = 0; i < numIterations; i++) {
             tstErrRateSum += trainAndTestMlp();
@@ -93,6 +95,8 @@ public class Main {
         System.err.println(String.format("Error rate on train data: %f", trnErrRate));
         System.err.println(String.format("Error rate on test data: %f", tstErrRate));
 
+//        openImage(createClassificationRaster(mlp, tstInputFiles));
+
         return tstErrRate;
     }
 
@@ -113,7 +117,10 @@ public class Main {
      * Loads an image on a given {@code filePath} to a Matrix.
      * <p>
      * The image is loaded in grayscale and subsampled to SAMPLE_W x SAMPLE_H px.
-     * The resulting Matrix is a row vector of features (normalized intensity values in [0-1]) of size 1x7500.
+     * The resulting Matrix is a row vector of features (normalized intensity values in [0-1]) of size 1xN, where
+     * <pre>
+     * N = SAMPLE_W * SAMPLE_H
+     * </pre>
      * </p>
      */
     public static Mat loadImage(String filePath) {
@@ -122,15 +129,32 @@ public class Main {
         // Load as grayscale image.
         Mat image = Highgui.imread(filePath, Highgui.CV_LOAD_IMAGE_GRAYSCALE);
 
-        // Resize it.
-        Imgproc.resize(image, image, new Size(SAMPLE_W, SAMPLE_H));
+        // Increase its contrast.
+        if (INCREASE_SAMPLE_CONTRAST) {
+            increaseContrast(image);
+        }
+
+        // Downsample it.
+        Imgproc.resize(image, image, new Size(SAMPLE_W, SAMPLE_H), 0, 0, Imgproc.INTER_AREA);
+
+        // Normalize intensities.
+        Mat imageNorm = new MatOfFloat();
+        image.convertTo(imageNorm, CvType.CV_32F, 1.0 / 255.5);
 
         // Reshape it to a row vector.
-        Mat imageMat = new MatOfFloat();
-        image.convertTo(imageMat, CvType.CV_32F, 1.0 / 255.5);
-        imageMat = imageMat.reshape(0, 1);
+        Mat imageRowVec = imageNorm.reshape(0, 1);
 
-        return imageMat;
+
+        return imageRowVec;
+    }
+
+    /**
+     * Applies {@code image = a*image + beta} to each pixel intensity {@code a}.
+     */
+    public static void increaseContrast(Mat image) {
+        double alpha = 2.5;
+        double beta = -100;
+        image.convertTo(image, -1, alpha, beta);
     }
 
     /**
@@ -234,6 +258,53 @@ public class Main {
             LOG.debug(String.format("Predicted: %d | Expected: %d | Err: %b", predImgClass, expImgClass, err));
         }
         return (double) errCount / inputFiles.size();
+    }
+
+    public static Mat createClassificationRaster(CvANN_MLP mlp, List<Path> inputFiles) {
+        int rasterSideSize = (int) Math.ceil(Math.sqrt(inputFiles.size()));
+        int rasterWidthPx = rasterSideSize * SAMPLE_W;
+        int rasterHeightPx = rasterSideSize * SAMPLE_H;
+
+        int xPos = 0;
+        int yPos = 0;
+
+        Mat raster = Mat.zeros(rasterHeightPx, rasterWidthPx, CvType.CV_32F);
+
+        for (int i = 0; i < inputFiles.size(); i++) {
+            Path path = inputFiles.get(i);
+            Mat imageVector = loadImage(path.toString());
+            Mat image = imageVector.reshape(0, SAMPLE_H);
+
+            Mat predictedImgVector = Mat.zeros(1, 1, CvType.CV_32F);
+            mlp.predict(imageVector, predictedImgVector);
+
+            int expImgClass = getClassOf(path.toString());
+            int predImgClass = toClass(predictedImgVector);
+
+            if (expImgClass != predImgClass) {
+                Mat.zeros(5, SAMPLE_W, CvType.CV_32F).copyTo(image.submat(0, 5, 0, SAMPLE_W));
+            }
+
+            image.copyTo(raster.submat(yPos, yPos + SAMPLE_H, xPos, xPos + SAMPLE_W));
+            xPos += SAMPLE_W;
+            if (xPos >= rasterWidthPx) {
+                xPos = 0;
+                yPos += SAMPLE_H;
+            }
+        }
+
+        raster.convertTo(raster, CvType.CV_32F, 255.5);
+        return raster;
+    }
+
+    public static void openImage(Mat image) {
+        try {
+            File tempFile = File.createTempFile("temp-image-" + System.currentTimeMillis(), ".jpg");
+            Highgui.imwrite(tempFile.getAbsolutePath(), image);
+            Desktop.getDesktop().open(tempFile);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     public static String debug(Mat mat) {
