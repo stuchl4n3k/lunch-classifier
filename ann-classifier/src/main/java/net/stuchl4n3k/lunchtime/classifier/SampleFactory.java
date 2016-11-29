@@ -7,4 +7,6 @@ public interface SampleFactory {
 
     Sample createSample(String path, int width, int height);
 
+    Sample createLabeledSample(String path, int width, int height);
+
 }

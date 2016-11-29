@@ -16,6 +16,11 @@ public abstract class AbstractSampleFactory implements SampleFactory {
 
     @Override
     public Sample createSample(String path, int width, int height) {
+        return new Sample(createFeatures(path, width, height), null);
+    }
+
+    @Override
+    public Sample createLabeledSample(String path, int width, int height) {
         return new Sample(createFeatures(path, width, height), createLabel(path));
     }
 

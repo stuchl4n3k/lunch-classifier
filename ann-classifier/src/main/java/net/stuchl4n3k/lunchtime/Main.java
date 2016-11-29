@@ -35,8 +35,8 @@ public class Main {
     }
 
     // Parametrization:
-    public static final int SAMPLE_W = 80;
-    public static final int SAMPLE_H = 60;
+    public static final int SAMPLE_W = 10;
+    public static final int SAMPLE_H = 7;
     public static final int NUM_NEURONS_INPUT = SAMPLE_W * SAMPLE_H;
     public static final int NUM_NEURONS_HIDDEN_LAYER = 3;
     public static final int NUM_NEURONS_OUTPUT = 1;
@@ -62,7 +62,7 @@ public class Main {
     @SuppressWarnings("unchecked")
     public static double trainAndTestMlp() {
         // Find input files.
-        List<Path> inputFiles = IoUtils.findInputFiles(new File("input"));
+        List<Path> inputFiles = IoUtils.findInputFiles(new File("training_dataset"));
 
         // Random split train and test data.
         int splitPos = (int) Math.ceil(inputFiles.size() * PERCENT_TRN_SAMPLES);
@@ -76,7 +76,7 @@ public class Main {
         // MLP training.
         System.err.println("Training in progress...");
         trnInputFiles.forEach(path -> {
-            Sample sample = sampleFactory.createSample(path.toString(), SAMPLE_W, SAMPLE_H);
+            Sample sample = sampleFactory.createLabeledSample(path.toString(), SAMPLE_W, SAMPLE_H);
             ann.addTrainingSample(sample);
         });
         int iterationsCounter = ann.train();
@@ -101,7 +101,7 @@ public class Main {
     public static double computeErrorRate(ANN ann, List<Path> inputFiles) {
         int errCount = 0;
         for (Path path : inputFiles) {
-            Sample sample = sampleFactory.createSample(path.toString(), SAMPLE_W, SAMPLE_H);
+            Sample sample = sampleFactory.createLabeledSample(path.toString(), SAMPLE_W, SAMPLE_H);
             Label predictedLabel = ann.predict(sample.getFeatures());
 
             int expClass = (int) ((Mat) sample.getLabel().getValue()).get(0, 0)[0];
@@ -129,7 +129,7 @@ public class Main {
 
         for (int i = 0; i < inputFiles.size(); i++) {
             Path path = inputFiles.get(i);
-            Sample sample = sampleFactory.createSample(path.toString(), SAMPLE_W, SAMPLE_H);
+            Sample sample = sampleFactory.createLabeledSample(path.toString(), SAMPLE_W, SAMPLE_H);
             Label predictedLabel = ann.predict(sample.getFeatures());
 
             int expClass = (int) ((Mat) sample.getLabel().getValue()).get(0, 0)[0];
