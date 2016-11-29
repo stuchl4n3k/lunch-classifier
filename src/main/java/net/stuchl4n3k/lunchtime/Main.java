@@ -1,29 +1,23 @@
 package net.stuchl4n3k.lunchtime;
 
-import java.awt.Desktop;
 import java.io.File;
-import java.io.IOException;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
+import net.stuchl4n3k.lunchtime.classifier.ANN;
+import net.stuchl4n3k.lunchtime.classifier.Label;
+import net.stuchl4n3k.lunchtime.classifier.Sample;
+import net.stuchl4n3k.lunchtime.classifier.SampleFactory;
+import net.stuchl4n3k.lunchtime.classifier.impl.opencv.CvANN;
+import net.stuchl4n3k.lunchtime.classifier.impl.opencv.CvSampleFactory;
+import net.stuchl4n3k.lunchtime.classifier.util.IoUtils;
 import nu.pattern.OpenCV;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
-import org.opencv.core.MatOfFloat;
-import org.opencv.core.MatOfInt;
-import org.opencv.core.Size;
-import org.opencv.highgui.Highgui;
-import org.opencv.imgproc.Imgproc;
-import org.opencv.ml.CvANN_MLP;
 
 /**
- * LunchCam classifier using ANN (OpenCV implementation).
+ * LunchCam classifier using CvANN (OpenCV implementation).
  * <p>
  * Based on <a href="http://docs.opencv.org/2.4/modules/ml/doc/neural_networks.html">http://docs.opencv.org/2.4/modules/ml/doc/neural_networks.html</a>
  * and <a href="http://docs.opencv.org/3.1.0/dc/dd6/ml_intro.html">http://docs.opencv.org/3.1.0/dc/dd6/ml_intro.html</a>.
@@ -40,8 +34,6 @@ public class Main {
         System.loadLibrary(org.opencv.core.Core.NATIVE_LIBRARY_NAME);
     }
 
-    public static final Pattern SAMPLE_PATH_CLASS_PATTERN = Pattern.compile(".*_([012])\\.jpg$");
-
     // Parametrization:
     public static final int SAMPLE_W = 80;
     public static final int SAMPLE_H = 60;
@@ -49,7 +41,8 @@ public class Main {
     public static final int NUM_NEURONS_HIDDEN_LAYER = 3;
     public static final int NUM_NEURONS_OUTPUT = 1;
     public static final double PERCENT_TRN_SAMPLES = 0.85;
-    public static final boolean INCREASE_SAMPLE_CONTRAST = false;
+
+    private static SampleFactory sampleFactory = new CvSampleFactory();
 
     public static void main(String[] args) {
         int numIterations = 10;
@@ -66,9 +59,10 @@ public class Main {
     /**
      * Runs the training and testing algorithm and returns error rate on test data for a random split of samples.
      */
+    @SuppressWarnings("unchecked")
     public static double trainAndTestMlp() {
         // Find input files.
-        List<Path> inputFiles = findInputFiles(new File("input"));
+        List<Path> inputFiles = IoUtils.findInputFiles(new File("input"));
 
         // Random split train and test data.
         int splitPos = (int) Math.ceil(inputFiles.size() * PERCENT_TRN_SAMPLES);
@@ -77,190 +71,53 @@ public class Main {
         List<Path> tstInputFiles = inputFiles.subList(splitPos, inputFiles.size());
 
         // Init MLP: NUM_NEURONS_INPUT x NUM_NEURONS_HIDDEN_LAYER x NUM_NEURONS_OUTPUT.
-        MatOfInt layerSizes = new MatOfInt();
-        layerSizes.fromArray(NUM_NEURONS_INPUT, NUM_NEURONS_HIDDEN_LAYER, NUM_NEURONS_OUTPUT);
-
-        CvANN_MLP mlp = new CvANN_MLP();
-        mlp.create(layerSizes);
+        ANN ann = new CvANN(NUM_NEURONS_INPUT, NUM_NEURONS_HIDDEN_LAYER, NUM_NEURONS_OUTPUT);
 
         // MLP training.
         System.err.println("Training in progress...");
-        int iterationsCounter = train(mlp, trnInputFiles);
+        trnInputFiles.forEach(path -> {
+            Sample sample = sampleFactory.createSample(path.toString(), SAMPLE_W, SAMPLE_H);
+            ann.addTrainingSample(sample);
+        });
+        int iterationsCounter = ann.train();
         System.err.println(String.format("Done after %d iterations", iterationsCounter));
 
         // Compute MLP error rate on train and test data.
-        double trnErrRate = computeErrorRate(mlp, trnInputFiles);
-        double tstErrRate = computeErrorRate(mlp, tstInputFiles);
+        double trnErrRate = computeErrorRate(ann, trnInputFiles);
+        double tstErrRate = computeErrorRate(ann, tstInputFiles);
 
         System.err.println(String.format("Error rate on train data: %f", trnErrRate));
         System.err.println(String.format("Error rate on test data: %f", tstErrRate));
 
-//        openImage(createClassificationRaster(mlp, tstInputFiles));
+//        CvUtils.openAsImage(createClassificationRaster(ann, tstInputFiles));
+//        System.exit(0);
 
         return tstErrRate;
     }
 
     /**
-     * Lists all {@code *.jpg} files in a given {@code inputDir}.
-     */
-    public static List<Path> findInputFiles(File inputDir) {
-        List<Path> result = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(inputDir.toPath(), "*.jpg")) {
-            stream.forEach(result::add);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-        return result;
-    }
-
-    /**
-     * Loads an image on a given {@code filePath} to a Matrix.
-     * <p>
-     * The image is loaded in grayscale and subsampled to SAMPLE_W x SAMPLE_H px.
-     * The resulting Matrix is a row vector of features (normalized intensity values in [0-1]) of size 1xN, where
-     * <pre>
-     * N = SAMPLE_W * SAMPLE_H
-     * </pre>
-     * </p>
-     */
-    public static Mat loadImage(String filePath) {
-        LOG.debug("Loading image '{}'.", filePath);
-
-        // Load as grayscale image.
-        Mat image = Highgui.imread(filePath, Highgui.CV_LOAD_IMAGE_GRAYSCALE);
-
-        // Increase its contrast.
-        if (INCREASE_SAMPLE_CONTRAST) {
-            increaseContrast(image);
-        }
-
-        // Downsample it.
-        Imgproc.resize(image, image, new Size(SAMPLE_W, SAMPLE_H), 0, 0, Imgproc.INTER_AREA);
-
-        // Normalize intensities.
-        Mat imageNorm = new MatOfFloat();
-        image.convertTo(imageNorm, CvType.CV_32F, 1.0 / 255.5);
-
-        // Reshape it to a row vector.
-        Mat imageRowVec = imageNorm.reshape(0, 1);
-
-
-        return imageRowVec;
-    }
-
-    /**
-     * Applies {@code image = a*image + beta} to each pixel intensity {@code a}.
-     */
-    public static void increaseContrast(Mat image) {
-        double alpha = 2.5;
-        double beta = -100;
-        image.convertTo(image, -1, alpha, beta);
-    }
-
-    /**
-     * Gets the class of a given image {@code filePath} by inspecting the filename.
-     * <p>
-     * Each filename is expected to be in form {@code /option/path/to/file_[012].jpg}.
-     * Where [012] is one of possible classes.
-     * </p>
-     */
-    public static int getClassOf(String filePath) {
-        Matcher matcher = SAMPLE_PATH_CLASS_PATTERN.matcher(filePath);
-        if (matcher.matches()) {
-            int imgClass = Integer.parseInt(matcher.group(1));
-            switch (imgClass) {
-                case 0:
-                case 1:
-                    return 0;
-                case 2:
-                    return 1;
-            }
-        }
-
-        throw new IllegalArgumentException(String.format("Cannot deduce class of file '%s' - the path must end with _[012].jpg", filePath));
-    }
-
-    /**
-     * Transforms a given {@code imgClass} to a (vector) value between [-1;1].
-     */
-    public static Mat toMat(int imgClass) {
-        int mlpOutput;
-        if (imgClass > 0) {
-            mlpOutput = 1;
-        } else {
-            mlpOutput = -1;
-        }
-
-        Mat mlpOutputVector = Mat.zeros(1, 1, CvType.CV_32F);
-        mlpOutputVector.put(0, 0, mlpOutput);
-        return mlpOutputVector;
-    }
-
-    /**
-     * Transforms a given vector {@code mlpOutputVector} (an output of MLP prediction) back to a class {0;1}.
-     */
-    public static int toClass(Mat mlpOutputVector) {
-        double mlpOutput = mlpOutputVector.get(0, 0)[0];
-        int imgClass;
-        if (mlpOutput < 0) {
-            imgClass = 0;
-        } else {
-            imgClass = 1;
-        }
-        return imgClass;
-    }
-
-    public static int train(CvANN_MLP mlp, List<Path> inputFiles) {
-        Mat inputRowVectors = new Mat();
-        Mat outputRowVectors = new Mat();
-        Mat sampleWeightVectors = Mat.ones(inputFiles.size(), 1, CvType.CV_32FC1);
-
-        for (int i = 0; i < inputFiles.size(); i++) {
-            Path path = inputFiles.get(i);
-
-            Mat imageVector = loadImage(path.toString());
-            inputRowVectors.push_back(imageVector);
-
-            int imgClass = getClassOf(path.toString());
-            Mat imgClassVector = toMat(imgClass);
-            outputRowVectors.push_back(imgClassVector);
-
-            // Adjust weight of this sample.
-//            double sampleWeight = imgClass == 1 ? 0.9 : 0.1;
-//            sampleWeightVectors.put(i, 0, sampleWeight);
-        }
-
-        LOG.debug("inputRowVectors: \n{}", debug(inputRowVectors));
-        LOG.debug("outputRowVectors: \n{}", debug(outputRowVectors));
-
-        return mlp.train(inputRowVectors, outputRowVectors, sampleWeightVectors);
-    }
-
-    /**
      * Computes mean error rate using a given {@code mlp} classifier on given {@code inputFiles}.
      */
-    public static double computeErrorRate(CvANN_MLP mlp, List<Path> inputFiles) {
+    public static double computeErrorRate(ANN ann, List<Path> inputFiles) {
         int errCount = 0;
         for (Path path : inputFiles) {
-            Mat imageVector = loadImage(path.toString());
+            Sample sample = sampleFactory.createSample(path.toString(), SAMPLE_W, SAMPLE_H);
+            Label predictedLabel = ann.predict(sample.getFeatures());
 
-            Mat predictedImgVector = Mat.zeros(1, 1, CvType.CV_32F);
-            mlp.predict(imageVector, predictedImgVector);
+            int expClass = (int) ((Mat) sample.getLabel().getValue()).get(0, 0)[0];
+            int predClass = (int) ((Mat) predictedLabel.getValue()).get(0, 0)[0];
 
-            int expImgClass = getClassOf(path.toString());
-            int predImgClass = toClass(predictedImgVector);
-
-            boolean err = expImgClass != predImgClass;
+            boolean err = expClass != predClass;
             if (err) {
                 errCount++;
             }
 
-            LOG.debug(String.format("Predicted: %d | Expected: %d | Err: %b", predImgClass, expImgClass, err));
+            LOG.debug(String.format("Predicted: %d | Expected: %d | Err: %b", expClass, predClass, err));
         }
         return (double) errCount / inputFiles.size();
     }
 
-    public static Mat createClassificationRaster(CvANN_MLP mlp, List<Path> inputFiles) {
+    public static Mat createClassificationRaster(ANN ann, List<Path> inputFiles) {
         int rasterSideSize = (int) Math.ceil(Math.sqrt(inputFiles.size()));
         int rasterWidthPx = rasterSideSize * SAMPLE_W;
         int rasterHeightPx = rasterSideSize * SAMPLE_H;
@@ -272,16 +129,16 @@ public class Main {
 
         for (int i = 0; i < inputFiles.size(); i++) {
             Path path = inputFiles.get(i);
-            Mat imageVector = loadImage(path.toString());
-            Mat image = imageVector.reshape(0, SAMPLE_H);
+            Sample sample = sampleFactory.createSample(path.toString(), SAMPLE_W, SAMPLE_H);
+            Label predictedLabel = ann.predict(sample.getFeatures());
 
-            Mat predictedImgVector = Mat.zeros(1, 1, CvType.CV_32F);
-            mlp.predict(imageVector, predictedImgVector);
+            int expClass = (int) ((Mat) sample.getLabel().getValue()).get(0, 0)[0];
+            int predClass = (int) ((Mat) predictedLabel.getValue()).get(0, 0)[0];
 
-            int expImgClass = getClassOf(path.toString());
-            int predImgClass = toClass(predictedImgVector);
+            Mat image = (Mat) sample.getFeatures().getValue();
+            image = image.reshape(0, SAMPLE_H);
 
-            if (expImgClass != predImgClass) {
+            if (expClass != predClass) {
                 Mat.zeros(5, SAMPLE_W, CvType.CV_32F).copyTo(image.submat(0, 5, 0, SAMPLE_W));
             }
 
@@ -295,34 +152,6 @@ public class Main {
 
         raster.convertTo(raster, CvType.CV_32F, 255.5);
         return raster;
-    }
-
-    public static void openImage(Mat image) {
-        try {
-            File tempFile = File.createTempFile("temp-image-" + System.currentTimeMillis(), ".jpg");
-            Highgui.imwrite(tempFile.getAbsolutePath(), image);
-            Desktop.getDesktop().open(tempFile);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    public static String debug(Mat mat) {
-        return debug(mat, false);
-    }
-
-    public static String debug(Mat mat, boolean withContent) {
-        StringBuilder strb = new StringBuilder();
-        strb.append(mat.toString()).append("\n");
-        if (withContent) {
-            for (int i = 0; i < mat.rows(); i++) {
-                for (int j = 0; j < mat.cols(); j++) {
-                    strb.append(String.format("%.2f ", mat.get(i, j)[0]));
-                }
-                strb.append("\n");
-            }
-        }
-        return strb.toString();
     }
 }
 
