@@ -17,6 +17,7 @@
     <modules>
         <module>ann-classifier</module>
         <module>lunchtime-web</module>
+        <module>lunchtime-web-war</module>
     </modules>
 
     <dependencyManagement>
