@@ -1,7 +1,6 @@
 package net.stuchl4n3k.lunchtime.service.impl;
 
 import java.io.File;
-import java.nio.file.Path;
 import java.util.List;
 import javax.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +15,7 @@ import net.stuchl4n3k.lunchtime.domain.ClassificationResult;
 import net.stuchl4n3k.lunchtime.service.ClassificationService;
 import nu.pattern.OpenCV;
 import org.opencv.core.Mat;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import static net.stuchl4n3k.lunchtime.Main.NUM_NEURONS_HIDDEN_LAYER;
 import static net.stuchl4n3k.lunchtime.Main.NUM_NEURONS_INPUT;
@@ -34,6 +34,9 @@ public class ClassificationServiceImpl implements ClassificationService {
     private final ANN ann = new CvANN(NUM_NEURONS_INPUT, NUM_NEURONS_HIDDEN_LAYER, NUM_NEURONS_OUTPUT);
     private final SampleFactory sampleFactory = new CvSampleFactory();
 
+    @Value("#{'${LUNCHTIME_HOME:}' ?: '${user.home}/lunchtime'}")
+    private String lunchtimeHomeDir;
+
     // Load OpenCV native libraries.
     static {
         OpenCV.loadShared();
@@ -43,12 +46,18 @@ public class ClassificationServiceImpl implements ClassificationService {
     @PostConstruct
     public void trainAnn() {
         // Find input files.
-        List<Path> inputFiles = IoUtils.findInputFiles(new File("training_dataset"));
+        File trainingDatasetDir = new File(lunchtimeHomeDir, "training_dataset");
+        if (!trainingDatasetDir.exists()) {
+            LOG.info("Training dir '{}' does not exist. Defaulting to './training_dataset'.", trainingDatasetDir);
+            trainingDatasetDir = new File("training_dataset");
+        }
+
+        List<String> inputFiles = IoUtils.findInputFiles(trainingDatasetDir);
 
         // MLP training.
         LOG.info("ANN training in progress...");
         inputFiles.forEach(path -> {
-            Sample sample = sampleFactory.createLabeledSample(path.toString(), SAMPLE_W, SAMPLE_H);
+            Sample sample = sampleFactory.createLabeledSample(path, SAMPLE_W, SAMPLE_H);
             ann.addTrainingSample(sample);
         });
         int iterationsCounter = ann.train();

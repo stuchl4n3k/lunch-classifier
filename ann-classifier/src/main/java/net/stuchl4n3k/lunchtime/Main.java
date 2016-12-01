@@ -62,13 +62,13 @@ public class Main {
     @SuppressWarnings("unchecked")
     public static double trainAndTestMlp() {
         // Find input files.
-        List<Path> inputFiles = IoUtils.findInputFiles(new File("training_dataset"));
+        List<String> inputFiles = IoUtils.findInputFiles(new File("training_dataset"));
 
         // Random split train and test data.
         int splitPos = (int) Math.ceil(inputFiles.size() * PERCENT_TRN_SAMPLES);
         Collections.shuffle(inputFiles);
-        List<Path> trnInputFiles = inputFiles.subList(0, splitPos);
-        List<Path> tstInputFiles = inputFiles.subList(splitPos, inputFiles.size());
+        List<String> trnInputFiles = inputFiles.subList(0, splitPos);
+        List<String> tstInputFiles = inputFiles.subList(splitPos, inputFiles.size());
 
         // Init MLP: NUM_NEURONS_INPUT x NUM_NEURONS_HIDDEN_LAYER x NUM_NEURONS_OUTPUT.
         ANN ann = new CvANN(NUM_NEURONS_INPUT, NUM_NEURONS_HIDDEN_LAYER, NUM_NEURONS_OUTPUT);
@@ -98,10 +98,10 @@ public class Main {
     /**
      * Computes mean error rate using a given {@code mlp} classifier on given {@code inputFiles}.
      */
-    public static double computeErrorRate(ANN ann, List<Path> inputFiles) {
+    public static double computeErrorRate(ANN ann, List<String> inputFiles) {
         int errCount = 0;
-        for (Path path : inputFiles) {
-            Sample sample = sampleFactory.createLabeledSample(path.toString(), SAMPLE_W, SAMPLE_H);
+        for (String path : inputFiles) {
+            Sample sample = sampleFactory.createLabeledSample(path, SAMPLE_W, SAMPLE_H);
             Label predictedLabel = ann.predict(sample.getFeatures());
 
             int expClass = (int) ((Mat) sample.getLabel().getValue()).get(0, 0)[0];
@@ -117,7 +117,7 @@ public class Main {
         return (double) errCount / inputFiles.size();
     }
 
-    public static Mat createClassificationRaster(ANN ann, List<Path> inputFiles) {
+    public static Mat createClassificationRaster(ANN ann, List<String> inputFiles) {
         int rasterSideSize = (int) Math.ceil(Math.sqrt(inputFiles.size()));
         int rasterWidthPx = rasterSideSize * SAMPLE_W;
         int rasterHeightPx = rasterSideSize * SAMPLE_H;
@@ -128,8 +128,8 @@ public class Main {
         Mat raster = Mat.zeros(rasterHeightPx, rasterWidthPx, CvType.CV_32F);
 
         for (int i = 0; i < inputFiles.size(); i++) {
-            Path path = inputFiles.get(i);
-            Sample sample = sampleFactory.createLabeledSample(path.toString(), SAMPLE_W, SAMPLE_H);
+            String path = inputFiles.get(i);
+            Sample sample = sampleFactory.createLabeledSample(path, SAMPLE_W, SAMPLE_H);
             Label predictedLabel = ann.predict(sample.getFeatures());
 
             int expClass = (int) ((Mat) sample.getLabel().getValue()).get(0, 0)[0];

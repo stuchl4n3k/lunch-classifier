@@ -22,12 +22,16 @@ public final class IoUtils {
     /**
      * Lists all {@code *.jpg} files in a given {@code inputDir}.
      */
-    public static List<Path> findInputFiles(File inputDir) {
-        List<Path> result = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(inputDir.toPath(), "*.jpg")) {
-            stream.forEach(result::add);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+    public static List<String> findInputFiles(File inputDir) {
+        List<String> result = new ArrayList<>();
+        if (inputDir.exists()) {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(inputDir.toPath(), "*.jpg")) {
+                stream.forEach(path -> result.add(path.toString()));
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        } else {
+            throw new IllegalArgumentException("Input dir does not exist: " + inputDir);
         }
         return result;
     }
